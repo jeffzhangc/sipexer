@@ -9,6 +9,7 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -153,6 +154,11 @@ func SGAuthGetNC(vNC int) string {
 // SGAuthBuildResponseBody - return the body for auth header in response
 func SGAuthBuildResponseBody(username string, password string, ha1mode bool, hparams map[string]string) (string, error) {
 	// https://en.wikipedia.org/wiki/Digest_access_authentication
+	for _, name := range []string{"realm", "nonce", "method", "uri"} {
+		if value, ok := hparams[name]; !ok || value == "" {
+			return "", fmt.Errorf("missing required digest parameter: %s", name)
+		}
+	}
 
 	vAlgHdr, ok := hparams["algorithm"]
 	if !ok {
@@ -496,7 +502,7 @@ func SGAKAHandleChallenge(username string, key, op, opc, amf []byte, challengePa
 	amfin := autn[6:8]
 	mac := autn[8:16]
 
-	if SGAKACompareBytes(amf, amfin) != 0 {
+	if subtle.ConstantTimeCompare(amf, amfin) != 1 {
 		return "", fmt.Errorf("failed to match amf")
 	}
 
@@ -510,7 +516,7 @@ func SGAKAHandleChallenge(username string, key, op, opc, amf []byte, challengePa
 	if err != nil {
 		return "", fmt.Errorf("failed to xmac: %w", err)
 	}
-	if SGAKACompareBytes(mac, xmac) != 0 {
+	if subtle.ConstantTimeCompare(mac, xmac) != 1 {
 		return "", fmt.Errorf("failed to match xmac")
 	}
 

@@ -187,6 +187,37 @@ func TestSGAuthBuildResponseBody(t *testing.T) {
 	}
 }
 
+func TestSGAuthBuildResponseBodyRequiresChallengeParameters(t *testing.T) {
+	valid := map[string]string{
+		"realm":  "example.com",
+		"nonce":  "n123",
+		"method": "REGISTER",
+		"uri":    "sip:example.com",
+	}
+
+	for _, name := range []string{"realm", "nonce", "method", "uri"} {
+		for _, mode := range []string{"missing", "empty"} {
+			t.Run(name+"/"+mode, func(t *testing.T) {
+				params := make(map[string]string, len(valid))
+				for key, value := range valid {
+					params[key] = value
+				}
+				if mode == "missing" {
+					delete(params, name)
+				} else {
+					params[name] = ""
+				}
+
+				if _, err := SGAuthBuildResponseBody("alice", "secret", false, params); err == nil {
+					t.Fatalf("expected an error for %s %s", mode, name)
+				} else if !strings.Contains(err.Error(), name) {
+					t.Fatalf("error %q does not identify %s", err, name)
+				}
+			})
+		}
+	}
+}
+
 func TestSGAuthBuildResponseBodyEscapesQuotedValues(t *testing.T) {
 	username := `al"ice\admin`
 	hparams := map[string]string{
