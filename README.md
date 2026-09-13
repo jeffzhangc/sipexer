@@ -15,6 +15,11 @@ Project URL:
     + [Download Binary Release](#download-binary-release)
   * [Usage](#usage)
     + [Examples](#examples)
+  * [Wrapped CLI (`sipx`)](#wrapped-cli-sipx)
+    + [Manage phone profiles](#manage-phone-profiles)
+    + [Manage service addresses](#manage-service-addresses)
+    + [Dial](#dial)
+    + [History](#history)
   * [Target Address](#target-address)
   * [Message Template](#message-template)
     + [Template Data](#template-data)
@@ -91,11 +96,32 @@ go build .
 
 The binary `sipexer` should be generated in the current directory.
 
-**Note:** On some OS distributions, it may be required to run the `go build` command
-with `CGO_ENABLED=0`, like:
+The repository also ships a wrapped CLI, `sipx`, that manages phone
+profiles and dial history on top of the engine. Build both with `make`
+(the engine binary is untouched):
 
 ```
-CGO_ENABLED=0 go build .
+make              # build ./sipexer and ./sipx for this machine
+make test         # go vet + go test
+make dist         # cross-compile mac+linux x amd64+arm64 bundles into dist/
+make install      # stage both binaries + doc under /usr/local (sudo if needed)
+```
+
+Each `dist/` bundle (`sipexer-sipx-<version>-<os>-<arch>.tar.gz`) contains:
+
+```
+bin/sipexer                    # the engine
+bin/sipx                       # the wrapper (finds bin/sipexer next to it)
+share/doc/sipx/SIPX.md         # standalone sipx usage guide (Chinese)
+```
+
+See **[SIPX.md](SIPX.md)** for the full `sipx` manual.
+
+**Note:** On some OS distributions, it may be required to run the `make`
+commands with `CGO_ENABLED=0`, like:
+
+```
+CGO_ENABLED=0 make
 ```
 
 ### Download Binary Release
@@ -121,6 +147,95 @@ Defaults:
   * From domain: `localhost`
   * To user: `bob`
   * To domain: `localhost`
+
+## Wrapped CLI (`sipx`)
+
+`sipx` is a thin wrapper around `sipexer` that keeps a set of phone
+profiles (multiple registered numbers, multiple service addresses, auth
+credentials) and a dial history, so repeated outbound tests become one
+short command. The engine binary itself is never modified; `sipx` locates
+it at runtime and runs it as a subprocess.
+
+Engine discovery order (`sipx doctor` shows the resolved path):
+  * `--engine <path>` flag (on any command)
+  * `SIPEXER_BIN` environment variable
+  * a `sipexer` binary in the same directory as `sipx`
+  * `sipexer` on `PATH`
+
+Configuration lives in `~/.config/sipexer/` (`profiles.json`,
+`history.json`), overridable with `--config-dir`, `SIPEXER_CONFIG_DIR`,
+or `$XDG_CONFIG_HOME/sipexer`. Passwords and HA1 digests are stored
+obfuscated at rest — this is defense-in-depth, not encryption; protect
+the directory with file permissions.
+
+### Manage phone profiles
+
+```
+sipx phone add work --auth-user 18800012001 --auth-password '...' \
+    --number 'desk=1001@example.com' --number 'mob=1002@example.com' \
+    --server udp://pbx.example.com:5060 --server-default \
+    --register-first --method INVITE --set-user --contact-build \
+    --sw 60000 --vl 3
+sipx phone list
+sipx phone show work
+sipx phone edit work --number 'newline=2001@example.com'
+sipx phone default work
+sipx phone rm work
+```
+
+Typed call defaults stored on the profile (only emitted when set):
+`--sw`, `--cd`, `--rt`, `--timeout`, `--timeout-connect`,
+`--timeout-write`, `--vl`, `--co`, `--com`, `--ti`, `--ex`, `--ua`,
+`--cu`, `--ct`, `--mb`, `--method`, `--xh`, `--register-first`,
+`--set-user`, `--contact-build`, plus `--extra-dial-flag` for anything
+else. Per-dial CLI flags override the stored defaults.
+
+### Manage service addresses
+
+```
+sipx server add work tcp://pbx2.example.com:5060 --default
+sipx server list work
+sipx server rm work tcp://pbx2.example.com:5060
+```
+
+### Dial
+
+```
+sipx phone default work              # mark the current profile
+sipx dial work 320196120001          # raw number
+sipx dial 320196120001               # uses the default profile (no name needed)
+sipx dial desk                       # profile number alias (via default profile)
+sipx dial @0                         # most recent history entry
+sipx dial boss                       # history-entry alias
+sipx dial -s udp://other:5060 1001   # override server
+sipx dial work 1001 -- -vl 3         # raw engine flags after --
+```
+
+With no target and a terminal, `sipx dial` prints the profile's recent dial
+history and a manual-number prompt; pick an entry, a number alias, or type a
+raw number. Without a terminal it fails with guidance. `sipx phone default
+[name]` sets the current profile (marked `*` in `phone list`); a single
+profile is the implicit default.
+
+**Call teardown:** after a successful INVITE the engine sends BYE when the
+session wait (`--sw`, stored in the profile or passed on the command line)
+expires — the clean way to hang up. `sipexer` has no signal handling, so
+**Ctrl-C kills the process without a BYE** and the gateway must time the
+dialog out. Avoid interrupting a dial in progress; to end a call sooner,
+use a smaller `--sw`.
+
+### History
+
+```
+sipx history                              # list (most recent first)
+sipx history alias 0 boss                 # label the newest entry
+sipx history clear                        # empty the store (asks first)
+```
+
+Each (profile, from-number, target) is kept as a **single** entry: re-dialing
+the same number updates that entry's timestamp and moves it to the top
+(its alias is preserved). The store is capped at 100 entries, oldest evicted
+first.
 
 ### Examples
 
